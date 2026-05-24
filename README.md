@@ -1,4 +1,4 @@
-# ra2-agent
+# ra2sophon
 
 Red Alert 2: Yuri's Revenge 的 AI 代理基础框架。通过读取游戏进程内存获取实时状态，通过 Win32 API 发送键盘鼠标指令，为后续全自动对局打下基础。
 
@@ -35,27 +35,27 @@ uv sync
 
 ```bash
 # 读取并打印一次游戏状态
-uv run python -m ra2_agent
+uv run python -m ra2sophon
 
 # 持续监控，每秒刷新，游戏关闭后自动重连
-uv run python -m ra2_agent monitor
+uv run python -m ra2sophon monitor
 
 # 交互式内存偏移探测，用于发现新的数据地址
-uv run python -m ra2_agent probe
+uv run python -m ra2sophon probe
 
 # 扫描玩家拥有的单位与建筑对象
-uv run python -m ra2_agent objects
+uv run python -m ra2sophon objects
 
 # 按类型显示各方阵营的单位/建筑明细
-uv run python -m ra2_agent stats
+uv run python -m ra2sophon stats
 ```
 
 ## 项目结构
 
 ```
-ra2-agent/
+ra2sophon/
 ├── pyproject.toml
-└── src/ra2_agent/
+└── src/ra2sophon/
     ├── __init__.py              # 包导出
     ├── __main__.py              # python -m 入口
     ├── memory/                  # 内存读取层

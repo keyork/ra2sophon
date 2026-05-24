@@ -1,9 +1,9 @@
-"""RA2 Agent — Main entry point.
+"""RA2 Sophon — Main entry point.
 
 Usage:
-    python -m ra2_agent          # Read game state once and print
-    python -m ra2_agent probe    # Interactive memory probe for offset discovery
-    python -m ra2_agent monitor  # Continuous game state monitoring
+    python -m ra2sophon          # Read game state once and print
+    python -m ra2sophon probe    # Interactive memory probe for offset discovery
+    python -m ra2sophon monitor  # Continuous game state monitoring
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     datefmt="%H:%M:%S",
 )
-logger = logging.getLogger("ra2_agent")
+logger = logging.getLogger("ra2sophon")
 
 
 def print_state(reader: GameReader) -> None:
@@ -139,7 +139,7 @@ def main() -> None:
                 cmd_stats(reader)
             else:
                 print(f"Unknown mode: {mode}")
-                print("Usage: python -m ra2_agent [probe|monitor|objects|stats]")
+                print("Usage: python -m ra2sophon [probe|monitor|objects|stats]")
         else:
             print_state(reader)
     finally:
