@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+*.egg
+dist/
+build/
+wheels/
+
+# Virtual environments
+.venv/
+venv/
+
+# Package manager
+uv.lock
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# OpenCode agent
+.omo/
+
+# Temp / debug scripts (single underscore prefix, NOT __init__/__main__)
+/_*.py
+/_*.txt
+
+# Screenshots and images
+*.png
+*.jpg
+*.bmp
+
+# Test output
+test_output*.txt
+
+# Python version (optional - uncomment if you want to pin locally)
+# .python-version
