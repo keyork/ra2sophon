@@ -12,7 +12,7 @@ import logging
 import sys
 import time
 
-from .reader import GameReader
+from ..memory import GameReader
 from .probe import MemoryProbe
 from .monitor import run_monitor
 
@@ -91,7 +91,7 @@ def cmd_monitor(reader: GameReader) -> None:
 
 def cmd_objects(reader: GameReader) -> None:
     """Scan for player-owned objects (units, buildings, etc.)."""
-    from .objects import scan_player_objects
+    from ..memory.objects import scan_player_objects
     print("Scanning for player objects (may take 10-20s)...")
     result = scan_player_objects(reader)
     print(f"\nFound {result.total} player-owned objects:")
@@ -114,7 +114,7 @@ def cmd_objects(reader: GameReader) -> None:
 def cmd_stats(reader: GameReader) -> None:
     """Show per-type unit/building counts for all active houses."""
     state = reader.read_game_state()
-    from .type_stats import format_faction_state
+    from ..display import format_faction_state
     for house in state.active_houses:
         print(format_faction_state(house, show_breakdown=True))
         print()

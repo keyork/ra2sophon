@@ -11,50 +11,10 @@ import sys
 import time
 import logging
 
-from .reader import GameReader
+from ..memory import GameReader
+from ..display import format_monitor
 
 logger = logging.getLogger(__name__)
-
-
-def format_monitor(state) -> str:
-    """Format the full game state for terminal display."""
-    lines = []
-    lines.append("=" * 60)
-    lines.append("  RA2:YR State Monitor  (Ctrl+C to stop)")
-    lines.append("=" * 60)
-
-    active = state.active_houses
-
-    if not active:
-        if state.player_ptr == 0:
-            lines.append("  (Not in battle - in menu or lobby)")
-        else:
-            lines.append(f"  PlayerPtr: 0x{state.player_ptr:08X}")
-            lines.append("  (No active houses - game may be loading)")
-        lines.append("=" * 60)
-        return "\n".join(lines)
-
-    from .type_stats import format_faction_state
-
-    for house in active:
-        lines.append(format_faction_state(house, show_breakdown=True))
-        lines.append("")
-
-    if len(active) >= 2:
-        lines.append("-" * 60)
-        for house in active:
-            name = house.house_type_name or f"P{house.array_index}"
-            tag = " *" if house.is_current_player else ""
-            lines.append(
-                f"  {name}{tag}: "
-                f"${house.credits or 0}  "
-                f"Pwr {house.power_surplus:+d}  "
-                f"Bldg:{house.building_total} "
-                f"Units:{house.vehicle_total}"
-            )
-
-    lines.append("=" * 60)
-    return "\n".join(lines)
 
 
 def run_monitor(interval: float = 1.0) -> None:

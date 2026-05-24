@@ -14,7 +14,7 @@ import logging
 import time
 from typing import Optional
 
-from .reader import GameReader
+from ..memory import GameReader
 
 logger = logging.getLogger(__name__)
 
