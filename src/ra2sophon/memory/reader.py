@@ -1,39 +1,41 @@
 """Memory reader for RA2:YR using pymem.
 
 Attaches to gamemd.exe and reads game state from known memory offsets.
-Auto-discovers counter-to-category mapping at runtime.
+Uses runtime counter discovery + unitdefs.py for type identification.
+
+Counter architecture (from YRpp HouseClass.h + ra2ob):
+    HouseClass contains CounterClass instances for tracking owned objects.
+    CounterClass layout: +0x00=vtable(0x7E5C54), +0x04=items_ptr,
+                         +0x08=count, +0x0C=flags(0x101), +0x10=total
+    items_ptr -> int[] where items[i] = count of type with ArrayIndex i
+
+    The exact position of each counter within HouseClass may shift with
+    Ares/Phobos. We auto-discover the mapping at runtime by matching
+    item patterns against known TypeClass name arrays from the game itself.
 """
 
 from __future__ import annotations
 
 import logging
-import struct
 from typing import Optional
 
 from pymem import Pymem
 from pymem.exception import ProcessNotFound, CouldNotOpenProcess
 
 from .offsets import (
+    ALIVE_BUILDING_COUNTER,
+    ALIVE_VEHICLE_COUNTER,
+    ALIVE_INFANTRY_COUNTER,
+    ALIVE_AIRCRAFT_COUNTER,
     BUILDING_HEAP_CHUNK_SIZE,
     BUILDING_HEAP_SCAN_RANGES,
-    COUNTER_BUILDINGS,
-    COUNTER_BUILDINGS_ALT,
-    COUNTER_BUILDINGS_ALT2,
-    COUNTER_CLASS_SIZE,
-    COUNTER_MAX_COUNT,
-    COUNTER_UNITS_A,
-    COUNTER_UNITS_A_ALT,
-    COUNTER_UNITS_A_ALT2,
-    COUNTER_UNITS_B,
-    COUNTER_UNITS_B_ALT,
-    CTR_COUNT,
     CTR_ITEMS,
+    CTR_COUNT,
     CTR_TOTAL,
     DVEC_COUNT,
     DVEC_ITEMS,
     HOUSE_ARRAY_PTR,
     HOUSE_ARRAY_INDEX,
-    HOUSE_COUNTERS_BASE,
     HOUSE_COUNTER_VTABLE,
     HOUSE_CREDITS_CURRENT,
     HOUSE_CREDITS_SPENT,
@@ -44,6 +46,7 @@ from .offsets import (
     INFANTRY_TYPE_ARRAY,
     UNIT_TYPE_ARRAY,
     AIRCRAFT_TYPE_ARRAY,
+    ISDEFEATEDOFFSET,
     OBSERVER_MODE,
     OBSERVER_PTR,
     PLAYER_PTR,
@@ -52,244 +55,12 @@ from .offsets import (
     VTABLE_BUILDING_TYPE,
 )
 from .types import TypeCount, CounterInfo, HouseInfo, GameState
-
-# Counter-to-category mapping (offset, category_name, type_dvec_address)
-COUNTER_CATEGORIES = [
-    (COUNTER_BUILDINGS, "buildings", 0),
-    (COUNTER_UNITS_A, "units_a", UNIT_TYPE_ARRAY),
-    (COUNTER_BUILDINGS_ALT, "buildings_alt", 0),
-    (COUNTER_UNITS_B, "units_b", UNIT_TYPE_ARRAY),
-    (COUNTER_UNITS_A_ALT, "units_a_alt", UNIT_TYPE_ARRAY),
-    (COUNTER_BUILDINGS_ALT2, "buildings_alt2", 0),
-    (COUNTER_UNITS_B_ALT, "units_b_alt", UNIT_TYPE_ARRAY),
-    (COUNTER_UNITS_A_ALT2, "units_a_alt2", UNIT_TYPE_ARRAY),
-]
+from .unitdefs import UnitDef, VEHICLE_BY_OFFSET, BUILDING_BY_OFFSET, INFANTRY_BY_OFFSET, AIRCRAFT_BY_OFFSET
 
 logger = logging.getLogger(__name__)
 
+_UNIT_COUNT_MAX = 4096
 
-# ── Type Registry ─────────────────────────────────────────────────────────────
-
-class TypeRegistry:
-    """Caches type name arrays and discovers counter-to-category mapping."""
-
-    def __init__(self, reader: "GameReader") -> None:
-        self._reader = reader
-        self._names: dict[int, list[str]] = {}
-        self._building_type_array: Optional[int] = None
-        self._counter_map: dict[str, CounterInfo] = {}
-        self._counters_discovered = False
-
-    def get_names(self, dvec_addr: int) -> list[str]:
-        if dvec_addr in self._names:
-            return self._names[dvec_addr]
-        names = self._read_type_names(dvec_addr)
-        self._names[dvec_addr] = names
-        return names
-
-    def get_building_names(self) -> list[str]:
-        """Get building type names. Discovers via heap scan on first call."""
-        if self._building_type_array is not None:
-            return self.get_names(self._building_type_array)
-        names = self._discover_building_names_via_heap()
-        return names
-
-    def _discover_building_names_via_heap(self) -> list[str]:
-        """Scan process heap for BuildingTypeClass objects (vtable 0x7E4570).
-        Build an index→name mapping by reading each object's name at +0x24.
-        Returns a list where list[index] = building name."""
-        import struct as _struct
-        reader = self._reader
-        target_vtable = VTABLE_BUILDING_TYPE
-        vtable_bytes = _struct.pack("<I", target_vtable)
-
-        # Known heap regions for RA2 TypeClass objects (from offsets)
-        scan_ranges = BUILDING_HEAP_SCAN_RANGES
-        chunk_size = BUILDING_HEAP_CHUNK_SIZE
-
-        found_objects: list[tuple[int, str]] = []  # (address, name)
-
-        for start, end in scan_ranges:
-            addr = start
-            while addr < end:
-                try:
-                    chunk = reader.read_bytes(addr, chunk_size)
-                except Exception:
-                    addr += chunk_size
-                    continue
-
-                # Search for vtable pattern in chunk
-                pos = 0
-                while True:
-                    idx = chunk.find(vtable_bytes, pos)
-                    if idx < 0:
-                        break
-                    obj_addr = addr + idx
-                    # Read name at +0x24
-                    try:
-                        name_raw = reader.read_bytes(obj_addr + TYPE_NAME_OFFSET, 24)
-                        np = name_raw.find(b"\x00")
-                        if np >= 0:
-                            name_raw = name_raw[:np]
-                        name = name_raw.decode("ascii", errors="replace")
-                        # Validate: must be alphanumeric with underscores, 2+ chars
-                        if name and len(name) >= 2 and all(c.isalnum() or c == '_' for c in name):
-                            found_objects.append((obj_addr, name))
-                    except Exception:
-                        pass
-                    pos = idx + 4
-
-                addr += chunk_size
-
-        if not found_objects:
-            logger.warning("No BuildingTypeClass objects found on heap")
-            return []
-
-        # Sort by address (heap allocation order ≈ type registration order)
-        found_objects.sort(key=lambda x: x[0])
-
-        # Build name list indexed by position
-        names = [name for _, name in found_objects]
-        logger.info("Found %d BuildingTypeClass objects via heap scan", len(names))
-
-        # Also try to find the actual DVC by checking if addresses form a pointer array
-        # For now, cache as a virtual DVC at address 0 (special case)
-        self._building_type_array = 0  # marker: heap-scanned
-        self._names[0] = names
-        return names
-
-    def discover_counters(self, house_addr: int) -> None:
-        """Discover counter-to-category mapping.
-        
-        Uses a hybrid strategy:
-        1. InfantryType matching (verified: 0x5500 items match InfantryType names)
-        2. Structural pattern (8 counters in known order)
-        
-        Counter layout (verified 2025-05-24):
-          0x5500: Infantry (primary)
-          0x5528: Vehicles type A (subset 1)
-          0x5550: Infantry (alt)
-          0x5564: Vehicles type B (subset 2)
-          0x5578: Vehicles A (alt)
-          0x55A0: Infantry (alt 2)
-          0x55B4: Vehicles B (alt)
-          0x55C8: Vehicles A (alt 2)
-          
-        Buildings and Aircraft counters are in a DIFFERENT location (not found yet).
-        """
-        if self._counters_discovered:
-            return
-
-        reader = self._reader
-        counters = self._scan_counters(house_addr)
-        if not counters:
-            return
-
-        # Category mapping from named constants (verified 2025-05-24)
-        for ci in counters:
-            for offset_val, cat, dvec in COUNTER_CATEGORIES:
-                if ci.offset == offset_val:
-                    ci.category = cat
-                    ci.type_dvec = dvec
-                    self._counter_map[cat] = ci
-                    logger.info("Counter +0x%04X -> %s", ci.offset, cat)
-                    break
-
-        # Map primary counters for the house info
-        # infantry = primary infantry counter
-        # vehicles = vehicles_a + vehicles_b combined
-        # buildings = not yet available
-        # aircraft = not yet available
-        self._counters_discovered = True
-
-    def get_counter(self, category: str) -> Optional[CounterInfo]:
-        return self._counter_map.get(category)
-
-    def _scan_counters(self, house_addr: int) -> list[CounterInfo]:
-        """Scan HouseClass for valid CounterClass structures."""
-        reader = self._reader
-        counters = []
-        for i in range(COUNTER_MAX_COUNT):
-            offset = HOUSE_COUNTERS_BASE + i * COUNTER_CLASS_SIZE
-            vtable = reader.read_pointer(house_addr + offset)
-            if vtable != HOUSE_COUNTER_VTABLE:
-                continue
-            items_ptr = reader.read_pointer(house_addr + offset + CTR_ITEMS)
-            count = reader.read_int(house_addr + offset + CTR_COUNT)
-            total = reader.read_int(house_addr + offset + CTR_TOTAL)
-            if items_ptr and items_ptr >= 0x10000 and count is not None and 0 < count < 300:
-                counters.append(CounterInfo(
-                    offset=offset,
-                    items_ptr=items_ptr,
-                    count=count,
-                    total=total or 0,
-                ))
-        return counters
-
-    def _read_type_names(self, dvec_addr: int) -> list[str]:
-        reader = self._reader
-        items_ptr = reader.read_pointer(dvec_addr + DVEC_ITEMS)
-        count = reader.read_int(dvec_addr + DVEC_COUNT)
-        if not items_ptr or not count or count <= 0 or count > 500:
-            return []
-        names = []
-        for i in range(count):
-            tp = reader.read_pointer(items_ptr + i * 4)
-            if not tp or tp < 0x10000:
-                names.append("?")
-                continue
-            try:
-                raw = reader.read_bytes(tp + TYPE_NAME_OFFSET, 24)
-                null_pos = raw.find(b"\x00")
-                if null_pos >= 0:
-                    raw = raw[:null_pos]
-                name = raw.decode("ascii", errors="replace")
-                names.append(name if name else "?")
-            except Exception:
-                names.append("?")
-        return names
-
-    def _discover_building_type_array(self) -> Optional[int]:
-        """Find BuildingTypeClass DVC: direct in static, then indirect ptr."""
-        reader = self._reader
-        target_vtable = VTABLE_BUILDING_TYPE
-        # Phase 1: Direct DVC in static data
-        for addr in range(0xA83C00, 0xA90000, 4):
-            items_ptr = reader.read_pointer(addr + DVEC_ITEMS)
-            count = reader.read_int(addr + DVEC_COUNT)
-            if not items_ptr or items_ptr < 0x10000:
-                continue
-            if not count or count <= 0 or count > 200:
-                continue
-            first_obj = reader.read_pointer(items_ptr)
-            if first_obj < 0x10000:
-                continue
-            vt = reader.read_pointer(first_obj)
-            if vt == target_vtable:
-                logger.info("Found BuildingTypeClass DVC at 0x%X", addr)
-                return addr
-        # Phase 2: Indirect pointer -> heap DVC (wider range)
-        for addr in range(0xA80000, 0xB00000, 4):
-            ptr = reader.read_pointer(addr)
-            if not ptr or ptr < 0x10000:
-                continue
-            items_ptr = reader.read_pointer(ptr + DVEC_ITEMS)
-            count = reader.read_int(ptr + DVEC_COUNT)
-            if not items_ptr or items_ptr < 0x10000:
-                continue
-            if not count or count <= 0 or count > 200:
-                continue
-            first_obj = reader.read_pointer(items_ptr)
-            if first_obj < 0x10000:
-                continue
-            vt = reader.read_pointer(first_obj)
-            if vt == target_vtable:
-                logger.info("Found BuildingTypeClass DVC via ptr at 0x%X", addr)
-                return ptr
-        return None
-
-
-# ── Game Reader ───────────────────────────────────────────────────────────────
 
 class GameReader:
     """Reads game state from a running RA2:YR process."""
@@ -297,7 +68,8 @@ class GameReader:
     def __init__(self) -> None:
         self._pm: Optional[Pymem] = None
         self._base_addr: int = 0
-        self._type_registry: Optional[TypeRegistry] = None
+        self._type_names: dict[int, list[str]] = {}
+        self._building_names: Optional[list[str]] = None
 
     def attach(self) -> bool:
         for name in PROCESS_NAMES:
@@ -305,7 +77,6 @@ class GameReader:
                 pm = Pymem(name)
                 self._pm = pm
                 self._base_addr = pm.process_base.lpBaseOfDll
-                self._type_registry = TypeRegistry(self)
                 logger.info("Attached to %s (PID=%d)", name, pm.process_id)
                 return True
             except ProcessNotFound:
@@ -323,15 +94,10 @@ class GameReader:
         if self._pm:
             self._pm.close_process()
             self._pm = None
-            self._type_registry = None
 
     @property
     def is_attached(self) -> bool:
         return self._pm is not None
-
-    @property
-    def type_registry(self) -> Optional[TypeRegistry]:
-        return self._type_registry
 
     # ── Low-level reads ───────────────────────────────────────────────────────
 
@@ -377,14 +143,95 @@ class GameReader:
                 pointers.append(ptr)
         return pointers
 
+    # ── Type name reading ─────────────────────────────────────────────────────
+
+    def _get_type_names(self, dvec_addr: int) -> list[str]:
+        """Read type name strings from a TypeClass DVC array."""
+        if dvec_addr in self._type_names:
+            return self._type_names[dvec_addr]
+        items_ptr = self.read_pointer(dvec_addr + DVEC_ITEMS)
+        count = self.read_int(dvec_addr + DVEC_COUNT)
+        if not items_ptr or not count or count <= 0 or count > 500:
+            return []
+        names = []
+        for i in range(count):
+            tp = self.read_pointer(items_ptr + i * 4)
+            if not tp or tp < 0x10000:
+                names.append("?")
+                continue
+            try:
+                raw = self.read_bytes(tp + TYPE_NAME_OFFSET, 24)
+                null_pos = raw.find(b"\x00")
+                if null_pos >= 0:
+                    raw = raw[:null_pos]
+                name = raw.decode("ascii", errors="replace")
+                names.append(name if name else "?")
+            except Exception:
+                names.append("?")
+        self._type_names[dvec_addr] = names
+        return names
+
+    def _get_building_names(self) -> list[str]:
+        """Discover building type names via heap scan for vtable signature."""
+        if self._building_names is not None:
+            return self._building_names
+        import struct
+        vtable_bytes = struct.pack("<I", VTABLE_BUILDING_TYPE)
+        found: list[tuple[int, str]] = []
+        for start, end in BUILDING_HEAP_SCAN_RANGES:
+            addr = start
+            while addr < end:
+                try:
+                    chunk = self.read_bytes(addr, BUILDING_HEAP_CHUNK_SIZE)
+                except Exception:
+                    addr += BUILDING_HEAP_CHUNK_SIZE
+                    continue
+                pos = 0
+                while True:
+                    idx = chunk.find(vtable_bytes, pos)
+                    if idx < 0:
+                        break
+                    obj_addr = addr + idx
+                    try:
+                        name_raw = self.read_bytes(obj_addr + TYPE_NAME_OFFSET, 24)
+                        np_ = name_raw.find(b"\x00")
+                        if np_ >= 0:
+                            name_raw = name_raw[:np_]
+                        name = name_raw.decode("ascii", errors="replace")
+                        if name and len(name) >= 2 and all(
+                            c.isalnum() or c == "_" for c in name
+                        ):
+                            found.append((obj_addr, name))
+                    except Exception:
+                        pass
+                    pos = idx + 4
+                addr += BUILDING_HEAP_CHUNK_SIZE
+        found.sort(key=lambda x: x[0])
+        names = [name for _, name in found]
+        self._building_names = names
+        logger.info("Found %d BuildingTypeClass objects via heap scan", len(names))
+        return names
+
+    # ── Counter discovery ─────────────────────────────────────────────────────
+
+    def _scan_counter_at(self, house_addr: int, offset: int) -> Optional[CounterInfo]:
+        """Read a single CounterClass at a given HouseClass offset."""
+        vtable = self.read_pointer(house_addr + offset)
+        if vtable != HOUSE_COUNTER_VTABLE:
+            return None
+        items_ptr = self.read_pointer(house_addr + offset + CTR_ITEMS)
+        count = self.read_int(house_addr + offset + CTR_COUNT)
+        total = self.read_int(house_addr + offset + CTR_TOTAL)
+        if not items_ptr or items_ptr < 0x10000 or not count or count <= 0 or count > 500:
+            return None
+        return CounterInfo(offset=offset, items_ptr=items_ptr,
+                          count=count, total=total or 0)
+
     # ── Game state reads ──────────────────────────────────────────────────────
 
     def read_game_state(self) -> GameState:
         """Read a full game state snapshot with per-type breakdowns."""
         state = GameState()
-        tr = self._type_registry
-        if not tr:
-            return state
 
         state.player_ptr = self.read_pointer(PLAYER_PTR)
         obs_val = self.read_int(OBSERVER_MODE)
@@ -393,19 +240,13 @@ class GameReader:
         house_ptrs = self.read_dvec_pointers(HOUSE_ARRAY_PTR)
         obs_ptr = self.read_pointer(OBSERVER_PTR)
 
-        # Use first house to discover counter mapping
-        if house_ptrs and not tr._counters_discovered:
-            tr.discover_counters(house_ptrs[0])
-
         for ptr in house_ptrs:
-            house = self._read_house(ptr, state.player_ptr, obs_ptr, tr)
+            house = self._read_house(ptr, state.player_ptr, obs_ptr)
             state.houses.append(house)
 
         return state
 
-    def _read_house(
-        self, ptr: int, player_ptr: int, obs_ptr: int, tr: TypeRegistry
-    ) -> HouseInfo:
+    def _read_house(self, ptr: int, player_ptr: int, obs_ptr: int) -> HouseInfo:
         """Read a single HouseClass with per-type breakdowns."""
         arr_idx = self.read_int(ptr + HOUSE_ARRAY_INDEX)
         credits = self.read_int(ptr + HOUSE_CREDITS_CURRENT)
@@ -413,7 +254,6 @@ class GameReader:
         power = self.read_int(ptr + HOUSE_POWER_PRODUCED)
         drain = self.read_int(ptr + HOUSE_POWER_DRAINED)
 
-        # HouseType name
         ht_name = ""
         ht_ptr = self.read_pointer(ptr + HOUSE_TYPE_PTR)
         if ht_ptr and ht_ptr >= 0x10000:
@@ -426,6 +266,11 @@ class GameReader:
             except Exception:
                 pass
 
+        is_defeated = False
+        defeated_val = self.read_int(ptr + ISDEFEATEDOFFSET)
+        if defeated_val is not None and defeated_val != 0:
+            is_defeated = True
+
         house = HouseInfo(
             address=ptr,
             array_index=arr_idx if arr_idx is not None else -1,
@@ -436,58 +281,81 @@ class GameReader:
             power_produced=power,
             power_drained=drain,
             house_type_name=ht_name,
+            is_defeated=is_defeated,
         )
 
-        # Per-type breakdowns using discovered counters
-        counters = tr._scan_counters(ptr)
-        counter_map = {ci.offset: ci for ci in counters}
-        
-        # Buildings: counter COUNTER_BUILDINGS, names via heap scan
-        bld_ci = counter_map.get(COUNTER_BUILDINGS)
-        if bld_ci:
-            house.building_total = bld_ci.total
-            bld_names = tr.get_building_names()
-            for j in range(bld_ci.count):
-                v = self.read_int(bld_ci.items_ptr + j * 4)
-                if v and v > 0:
-                    name = bld_names[j] if j < len(bld_names) else f"Bldg#{j}"
-                    house.buildings.append(TypeCount(index=j, name=name, count=v))
-        
-        # Units: counters COUNTER_UNITS_A + COUNTER_UNITS_B, names from UnitType array
-        unit_a_ci = counter_map.get(COUNTER_UNITS_A)
-        unit_b_ci = counter_map.get(COUNTER_UNITS_B)
-        unit_names = tr.get_names(UNIT_TYPE_ARRAY)
-        
-        seen_names: dict[str, TypeCount] = {}
-        for uci in (unit_a_ci, unit_b_ci):
-            if uci:
-                for j in range(uci.count):
-                    v = self.read_int(uci.items_ptr + j * 4)
-                    if v and v > 0:
-                        name = unit_names[j] if j < len(unit_names) else f"Unit#{j}"
-                        if name in seen_names:
-                            seen_names[name] = TypeCount(
-                                index=seen_names[name].index,
-                                name=name,
-                                count=seen_names[name].count + v,
-                            )
-                        else:
-                            seen_names[name] = TypeCount(index=j, name=name, count=v)
-        house.vehicles = list(seen_names.values())
-        total_a = unit_a_ci.total if unit_a_ci else 0
-        total_b = unit_b_ci.total if unit_b_ci else 0
-        house.vehicle_total = total_a + total_b
+        # Read 4 alive counters using ra2ob offsets
+        for category, counter_offset, type_dvc, unitdef_lookup in [
+            ("building", ALIVE_BUILDING_COUNTER, 0,                   BUILDING_BY_OFFSET),
+            ("vehicle",  ALIVE_VEHICLE_COUNTER,  UNIT_TYPE_ARRAY,     VEHICLE_BY_OFFSET),
+            ("infantry", ALIVE_INFANTRY_COUNTER, INFANTRY_TYPE_ARRAY, INFANTRY_BY_OFFSET),
+            ("aircraft", ALIVE_AIRCRAFT_COUNTER, AIRCRAFT_TYPE_ARRAY, AIRCRAFT_BY_OFFSET),
+        ]:
+            ci = self._scan_counter_at(ptr, counter_offset)
+            if ci is None:
+                continue
+
+            # Get type names from game's own DVC arrays
+            if type_dvc and type_dvc != 0:
+                names = self._get_type_names(type_dvc)
+            elif category == "building":
+                names = self._get_building_names()
+            else:
+                names = []
+
+            items = self._read_counter_items(ci, names, unitdef_lookup, category)
+
+            if category == "building":
+                house.buildings = items
+                house.building_total = sum(tc.count for tc in items)
+            elif category == "infantry":
+                house.infantry = items
+                house.infantry_total = sum(tc.count for tc in items)
+            elif category == "vehicle":
+                house.naval = [tc for tc in items if tc.is_naval]
+                house.vehicles = [tc for tc in items if not tc.is_naval]
+                house.naval_total = sum(tc.count for tc in house.naval)
+                house.vehicle_total = sum(tc.count for tc in house.vehicles)
+            elif category == "aircraft":
+                house.aircraft = items
+                house.aircraft_total = sum(tc.count for tc in items)
 
         return house
 
-    def _make_breakdown(self, ci: CounterInfo, type_names: list[str]) -> list[TypeCount]:
-        """Read per-type counts from counter and pair with names."""
+    def _read_counter_items(
+        self,
+        ci: CounterInfo,
+        type_names: list[str],
+        unitdef_lookup: Optional[dict[int, UnitDef]],
+        category: str,
+    ) -> list[TypeCount]:
+        """Read per-type counts from a counter and pair with names."""
         result = []
         for i in range(ci.count):
             val = self.read_int(ci.items_ptr + i * 4)
-            if val and val > 0:
-                name = type_names[i] if i < len(type_names) else f"#{i}"
-                result.append(TypeCount(index=i, name=name, count=val))
+            if val is None or val <= 0 or val > _UNIT_COUNT_MAX:
+                continue
+
+            name = type_names[i] if i < len(type_names) and type_names[i] != "?" else f"#{i}"
+            name_cn = ""
+            faction = ""
+            is_naval = False
+
+            # Enhance with unitdef if available (byte offset = index * 4)
+            if unitdef_lookup:
+                byte_off = i * 4
+                udef = unitdef_lookup.get(byte_off)
+                if udef:
+                    name = udef.name
+                    name_cn = udef.name_cn
+                    faction = udef.faction
+                    is_naval = udef.is_naval
+
+            result.append(TypeCount(
+                index=i, name=name, name_cn=name_cn,
+                count=val, category=category, faction=faction,
+                is_naval=is_naval,
+            ))
         return result
 
     def get_process_info(self) -> dict:

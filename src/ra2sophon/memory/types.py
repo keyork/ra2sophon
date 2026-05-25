@@ -13,8 +13,12 @@ from typing import Optional
 class TypeCount:
     """Count of a specific type (building, infantry, unit, aircraft)."""
     index: int
-    name: str
-    count: int
+    name: str          # English name
+    name_cn: str = ""  # Chinese display name
+    count: int = 0
+    category: str = ""  # building / vehicle / infantry / aircraft
+    faction: str = ""   # allied / soviet / yuri
+    is_naval: bool = False
 
 
 @dataclass
@@ -39,22 +43,36 @@ class HouseInfo:
     credits_spent: Optional[int] = None
     power_produced: Optional[int] = None
     power_drained: Optional[int] = None
-    # Per-type breakdowns (populated by counter discovery)
+    # Per-type breakdowns (populated by counter reading with unitdefs)
     buildings: list[TypeCount] = field(default_factory=list)
     infantry: list[TypeCount] = field(default_factory=list)
     vehicles: list[TypeCount] = field(default_factory=list)
+    naval: list[TypeCount] = field(default_factory=list)
     aircraft: list[TypeCount] = field(default_factory=list)
     # Totals
     building_total: int = 0
     infantry_total: int = 0
     vehicle_total: int = 0
+    naval_total: int = 0
     aircraft_total: int = 0
     # HouseType identity
     house_type_name: str = ""
+    # Score / combat stats (from ra2ob offsets)
+    units_killed: int = 0
+    buildings_killed: int = 0
+    units_lost: int = 0
+    buildings_lost: int = 0
+    # Status flags
+    is_defeated: bool = False
 
     @property
     def power_surplus(self) -> int:
         return (self.power_produced or 0) - (self.power_drained or 0)
+
+    @property
+    def total_units(self) -> int:
+        """Total combat units (infantry + vehicles + naval + aircraft)."""
+        return self.infantry_total + self.vehicle_total + self.naval_total + self.aircraft_total
 
     @property
     def is_active(self) -> bool:
@@ -75,6 +93,20 @@ class HouseInfo:
         if not has_money:
             return False
         return True
+
+    @property
+    def faction(self) -> str:
+        """Guess faction from house_type_name."""
+        name = self.house_type_name.lower()
+        if "yuri" in name:
+            return "yuri"
+        soviet_names = {"russians", "africans", "arabs", "confederation"}
+        allied_names = {"americans", "alliance", "french", "germans", "british", "korea"}
+        if name in soviet_names:
+            return "soviet"
+        if name in allied_names:
+            return "allied"
+        return "unknown"
 
 
 @dataclass

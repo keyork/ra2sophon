@@ -45,9 +45,23 @@ OBSERVER_MODE = 0xAC10C8
 
 # ── Object Arrays (DynamicVectorClass pointers) ──────────────────────────────
 # Each is a pointer to a DynamicVectorClass<T*> containing all instances.
-AIRCRAFT_ARRAY = 0xA8E390
+# Source: YRpp (Metadorius/YRpp) static constexpr pointers.
+AIRCRAFT_ARRAY = 0xA8E390        # AircraftClass::Array
 TRIGGER_ARRAY = 0xA8EAE8
 TAG_ARRAY = 0xB0E720
+
+# TechnoClass::Array — all units, infantry, buildings, aircraft combined
+TECHNO_ARRAY = 0xA8EC78          # DynamicVectorClass<TechnoClass*>
+
+# Per-type instance arrays (YRpp confirmed)
+INFANTRY_ARRAY = 0xA83DE8        # InfantryClass::Array
+UNIT_ARRAY = 0x8B4108            # UnitClass::Array
+BUILDING_ARRAY = 0xA8EB40        # BuildingClass::Array
+
+# Other globals (YRpp confirmed)
+SCENARIO_INSTANCE = 0xA8B230     # ScenarioClass::Instance
+GAME_IS_ACTIVE = 0xA8E9A0        # Game::IsActive
+GAME_HWND = 0xB73550             # Game::hWnd
 
 # ── TypeClass Arrays (DVC addresses in static data) ──────────────────────────
 # Each DVC holds TypeClass* pointers. Name string at TypeClass+0x24.
@@ -102,16 +116,35 @@ HOUSE_COUNTER_VTABLE = 0x007E5C54
 COUNTER_CLASS_SIZE = 0x14      # 20 bytes per CounterClass
 COUNTER_MAX_COUNT = 12         # Max counters to scan
 
-# ── Counter Category Offsets (verified 2025-05-24) ─────────────────────────────
-# Each offset identifies a specific counter role within HouseClass.
-COUNTER_BUILDINGS = 0x5500        # BuildingType counter
-COUNTER_UNITS_A = 0x5528          # Vehicle/Infantry subset A
-COUNTER_BUILDINGS_ALT = 0x5550    # Building alt
-COUNTER_UNITS_B = 0x5564          # Vehicle/Infantry subset B
-COUNTER_UNITS_A_ALT = 0x5578      # Units A alt
-COUNTER_BUILDINGS_ALT2 = 0x55A0   # Building alt 2
-COUNTER_UNITS_B_ALT = 0x55B4      # Units B alt
-COUNTER_UNITS_A_ALT2 = 0x55C8     # Units A alt 2
+# ── Alive Counter Offsets (from ra2ob Constants.hpp) ─────────────────────────
+# These CounterClass offsets track units/buildings currently alive on the map.
+# Each CounterClass layout: +0x00=vtable, +0x04=items_ptr, +0x08=count,
+#                            +0x0C=flags(0x101), +0x10=total
+# items_ptr points to int[] where each int = count at that byte-offset slot.
+
+# Alive counters (currently on map) — the primary source for unit counts
+ALIVE_BUILDING_COUNTER  = 0x5550   # CounterClass base for alive buildings
+ALIVE_VEHICLE_COUNTER   = 0x5564   # CounterClass base for alive vehicles
+ALIVE_INFANTRY_COUNTER  = 0x5578   # CounterClass base for alive infantry
+ALIVE_AIRCRAFT_COUNTER  = 0x558C   # CounterClass base for alive aircraft
+
+# Items pointer = counter_base + 0x04
+ALIVE_BUILDING_ITEMS  = 0x5554     # int* — building counts by offset
+ALIVE_VEHICLE_ITEMS   = 0x5568     # int* — vehicle counts by offset
+ALIVE_INFANTRY_ITEMS  = 0x557C     # int* — infantry counts by offset
+ALIVE_AIRCRAFT_ITEMS  = 0x5590     # int* — aircraft counts by offset
+
+# Factory/production counters (units currently being produced)
+FACTORY_BUILDING_COUNTER  = 0x55A0  # CounterClass base for factory-produced buildings
+FACTORY_VEHICLE_COUNTER   = 0x55B4  # CounterClass base for factory-produced vehicles
+FACTORY_INFANTRY_COUNTER  = 0x55C8  # CounterClass base for factory-produced infantry
+FACTORY_AIRCRAFT_COUNTER  = 0x55DC  # CounterClass base for factory-produced aircraft
+
+# Legacy aliases (old counter naming, kept for reference)
+# 0x5500 = OwnedBuildingTypes (total ever built, includes destroyed)
+# 0x5528 = unknown subset counter
+OWNED_BUILDING_COUNTER = 0x5500    # Total owned buildings (historical)
+OWNED_UNKNOWN_COUNTER  = 0x5528    # Unknown subset
 
 # ── Heap Scan Ranges ───────────────────────────────────────────────────────────
 # Memory regions scanned when searching for game objects / type classes.
@@ -136,13 +169,26 @@ CTR_TOTAL  = 0x10   # int   - sum of all items
 HOUSE_TYPE_PTR = 0x34  # HouseTypeClass* (verified: name="Americans")
 
 # ── Object vtables (identify object types) ────────────────────────────────────
-VTABLE_INFANTRY = 0x007E180C        # InfantryClass
-VTABLE_BUILDING = 0x007F3FBC        # BuildingClass
-VTABLE_UNIT = 0x007EFDA4            # UnitClass (vehicles)
-VTABLE_AIRCRAFT = 0x007E8934        # AircraftClass
+# Source: YRpp headers (v1.001 binary, may shift with Ares/Phobos)
+VTABLE_INFANTRY = 0x007EB058        # InfantryClass
+VTABLE_BUILDING = 0x007E3EBC        # BuildingClass
+VTABLE_UNIT = 0x007F5C70            # UnitClass (vehicles)
+VTABLE_AIRCRAFT = 0x007E22A4        # AircraftClass
 
-# ── Object member offsets (by type) ──────────────────────────────────────────
-# Owner (HouseClass*) offset per object type:
+# ── Object member offsets (by class, YRpp confirmed) ─────────────────────────
+# ObjectClass members (base of all game objects):
+OBJ_HEALTH = 0x6C               # int - current HP
+OBJ_ESTIMATED_HEALTH = 0x70     # int - estimated HP (for display)
+OBJ_IS_ON_MAP = 0x74            # bool
+OBJ_IS_SELECTED = 0x7B          # bool - selected by player
+OBJ_IS_ALIVE = 0x83             # bool
+OBJ_LOCATION = 0x9C             # CoordStruct {int X, int Y, int Z} in leptons
+
+# TechnoClass members (all units, infantry, buildings, aircraft):
+TECH_OWNER = 0x1F8              # HouseClass* - owning player (approximate, varies by subclass)
+TECH_VETERANCY = 0x1C4          # float - 0.0=Rookie, 1.0=Veteran, 2.0=Elite (approximate)
+
+# Owner (HouseClass*) offset per object type (from live memory analysis):
 OBJ_OWNER_INFANTRY = 0x6C           # InfantryClass
 OBJ_OWNER_BUILDING = 0x84           # BuildingClass
 OBJ_OWNER_UNIT = 0x3C               # UnitClass
@@ -153,6 +199,19 @@ OBJ_COORD_UNIT = 0x28               # UnitClass: (x, y) as int pair
 
 # ── House identity ───────────────────────────────────────────────────────────
 HOUSE_ARRAY_INDEX = 0x38        # int - index in HouseClassArray (0,1,2,3...)
+
+# ── Player status offsets (from ra2ob Constants.hpp) ─────────────────────────
+ISDEFEATEDOFFSET = 0x1F5        # bool - player defeated
+ISGAMEOVEROFFSET = 0x1F6        # bool - game over for this house
+ISWINNEROFFSET   = 0x1F7        # bool - this house won
+TEAMNUMBEROFFSET = 0x1D8        # int - team number
+COLOROFFSET      = 0x56F9       # color value (3 bytes RGB)
+
+# ── Kill/Loss score offsets (from ra2ob Constants.hpp) ───────────────────────
+KILLEDUNITSOFHOUSES     = 0x53E4   # kills tracker for units
+KILLEDBUILDINGSOFHOUSES = 0x5438   # kills tracker for buildings
+TOTALKILLEDUNITS        = 0x5488   # total units killed by this house
+TOTALKILLEDBUILDINGS    = 0x5434   # total buildings killed by this house
 
 # ── Known Cheat Engine offsets for YR 1.001 ─────────────────────────────────
 # These were reported by the CE community for the vanilla 1.001 binary.
