@@ -5,7 +5,7 @@ Consolidates all formatting functions for game state display.
 
 from __future__ import annotations
 
-from ..memory.types import TypeCount, HouseInfo
+from ..memory.types import TypeCount, HouseInfo, GameState
 
 
 def format_breakdown(entries: list[TypeCount], indent: str = "    ") -> str:
@@ -58,7 +58,7 @@ def format_faction_state(house: HouseInfo, show_breakdown: bool = True) -> str:
     return "\n".join(lines)
 
 
-def format_monitor(state) -> str:
+def format_monitor(state: GameState) -> str:
     """Format the full game state for terminal display."""
     lines = []
     lines.append("=" * 70)

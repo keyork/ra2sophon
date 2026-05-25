@@ -11,11 +11,9 @@ from __future__ import annotations
 
 import logging
 import sys
-import time
 
 from ..memory import GameReader
 from .probe import MemoryProbe
-from .monitor import run_monitor
 
 logging.basicConfig(
     level=logging.INFO,
