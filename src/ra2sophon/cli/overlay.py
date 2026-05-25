@@ -1,6 +1,7 @@
 """Game overlay window — always-on-top, frameless, semi-transparent.
 
 Shows real-time RA2:YR battlefield stats. Press F9 to toggle show/hide.
+Appearance is configurable via data/overlay.toml.
 
 Usage:
     python -m ra2sophon overlay
@@ -10,7 +11,9 @@ from __future__ import annotations
 
 import ctypes
 import logging
+import tomllib
 import tkinter as tk
+from pathlib import Path
 
 from ..memory import GameReader
 from ..memory.types import HouseInfo, GameState, TypeCount
@@ -22,18 +25,15 @@ GWL_EXSTYLE = -20
 WS_EX_NOACTIVATE = 0x08000000
 WS_EX_APPWINDOW = 0x00040000
 WS_EX_TOOLWINDOW = 0x00000080
-WS_EX_TRANSPARENT = 0x00000020
-WS_EX_LAYERED = 0x00080000
 SWP_NOMOVE = 0x0002
 SWP_NOSIZE = 0x0001
 SWP_NOACTIVATE = 0x0010
 HWND_TOPMOST = -1
-
+HOTKEY_ID = 1
+MSG_STRUCT_SIZE = 48
 MOD_NOREPEAT = 0x4000
 VK_F9 = 0x78
 WM_HOTKEY = 0x0312
-HOTKEY_ID = 1
-MSG_STRUCT_SIZE = 48
 
 user32 = ctypes.windll.user32
 SetWindowLongW = user32.SetWindowLongW
@@ -43,50 +43,62 @@ RegisterHotKey = user32.RegisterHotKey
 UnregisterHotKey = user32.UnregisterHotKey
 PeekMessageW = user32.PeekMessageW
 
-# ── Overlay layout ────────────────────────────────────────────────────────────
-OVERLAY_ALPHA = 0.90
-OVERLAY_POSITION = "+10+10"
-FRAME_PAD_X = 8
-FRAME_PAD_Y = 6
-INIT_DELAY_MS = 200
-HOTKEY_POLL_MS = 100
-REFRESH_MS = 1000
-MAX_LINE_WIDTH = 50
+# ── Load overlay config from TOML ────────────────────────────────────────────
 
-# ── Colours ───────────────────────────────────────────────────────────────────
-BG_COLOR = "#1a1a2e"
-FG_SEPARATOR = "#333355"
-FG_ALLIED = "#4fc3f7"
-FG_SOVIET = "#ef5350"
-FG_YURI = "#ab47bc"
-FG_UNKNOWN = "#e0e0e0"
-FG_HEADER = "#ffd54f"
-FG_POWER_OK = "#66bb6a"
-FG_POWER_LOW = "#ff7043"
-FG_BUILDING = "#90a4ae"
-FG_INFANTRY = "#a5d6a7"
-FG_VEHICLE = "#80cbc4"
-FG_NAVAL = "#80deea"
-FG_AIRCRAFT = "#b39ddb"
+def _load_config() -> dict:
+    """Load overlay.toml, falling back to defaults for missing keys."""
+    toml_path = Path(__file__).resolve().parent.parent / "data" / "overlay.toml"
+    try:
+        with open(toml_path, "rb") as f:
+            return tomllib.load(f)
+    except FileNotFoundError:
+        logger.warning("overlay.toml not found, using defaults")
+        return {}
 
-CATEGORY_COLORS = {
-    "Building": FG_BUILDING,
-    "Infantry": FG_INFANTRY,
-    "Vehicle": FG_VEHICLE,
-    "Naval": FG_NAVAL,
-    "Aircraft": FG_AIRCRAFT,
-}
 
-# ── Fonts ─────────────────────────────────────────────────────────────────────
-FONT_HEADER = ("Consolas", 10, "bold")
-FONT_BODY = ("Consolas", 9)
-FONT_STATUS = ("Consolas", 10)
+_CFG = _load_config()
 
-# ── Faction colour lookup ────────────────────────────────────────────────────
+_ov = _CFG.get("overlay", {})
+OVERLAY_ALPHA = _ov.get("alpha", 0.90)
+OVERLAY_POSITION = _ov.get("position", "+10+10")
+REFRESH_MS = _ov.get("refresh_ms", 1000)
+MAX_LINE_WIDTH = _ov.get("line_width", 50)
+
+_frame = _ov.get("frame", {})
+FRAME_PAD_X = _frame.get("pad_x", 8)
+FRAME_PAD_Y = _frame.get("pad_y", 6)
+
+_timing = _ov.get("timing", {})
+INIT_DELAY_MS = _timing.get("init_delay_ms", 200)
+HOTKEY_POLL_MS = _timing.get("hotkey_poll_ms", 100)
+
+_fonts = _ov.get("fonts", {})
+FONT_HEADER = tuple(_fonts.get("header", ["Consolas", 10, "bold"]))
+FONT_BODY = tuple(_fonts.get("body", ["Consolas", 9]))
+FONT_STATUS = tuple(_fonts.get("status", ["Consolas", 10]))
+
+_clr = _CFG.get("colors", {})
+BG_COLOR = _clr.get("background", "#1a1a2e")
+FG_SEPARATOR = _clr.get("separator", "#333355")
+FG_HEADER = _clr.get("header", "#ffd54f")
+FG_POWER_OK = _clr.get("power_ok", "#66bb6a")
+FG_POWER_LOW = _clr.get("power_low", "#ff7043")
+
+_faction = _clr.get("faction", {})
 FACTION_COLORS: dict[str, str] = {
-    "allied": FG_ALLIED,
-    "soviet": FG_SOVIET,
-    "yuri": FG_YURI,
+    "allied": _faction.get("allied", "#4fc3f7"),
+    "soviet": _faction.get("soviet", "#ef5350"),
+    "yuri": _faction.get("yuri", "#ab47bc"),
+}
+FG_UNKNOWN = _faction.get("unknown", "#e0e0e0")
+
+_cat = _clr.get("category", {})
+CATEGORY_COLORS: dict[str, str] = {
+    "Building": _cat.get("Building", "#90a4ae"),
+    "Infantry": _cat.get("Infantry", "#a5d6a7"),
+    "Vehicle":  _cat.get("Vehicle", "#80cbc4"),
+    "Naval":    _cat.get("Naval", "#80deea"),
+    "Aircraft": _cat.get("Aircraft", "#b39ddb"),
 }
 
 
