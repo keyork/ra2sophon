@@ -17,6 +17,7 @@ Counter architecture (from YRpp HouseClass.h + ra2ob):
 from __future__ import annotations
 
 import logging
+import struct
 from typing import Optional
 
 from pymem import Pymem
@@ -59,7 +60,13 @@ from .unitdefs import UnitDef, VEHICLE_BY_OFFSET, BUILDING_BY_OFFSET, INFANTRY_B
 
 logger = logging.getLogger(__name__)
 
-_UNIT_COUNT_MAX = 4096
+# ── Memory layout constants ──────────────────────────────────────────────────
+INT32_SIZE = 4
+MIN_VALID_PTR = 0x10000          # Pointers below this are invalid/null
+MAX_TYPE_NAME_LEN = 24           # Max bytes for a type name string
+MAX_DVC_POINTER_COUNT = 1000     # Sanity limit for DVC pointer array
+MAX_TYPE_ARRAY_COUNT = 500       # Sanity limit for type name array
+UNIT_COUNT_MAX = 4096            # Max per-type unit count (sanity)
 
 
 class GameReader:
@@ -129,17 +136,25 @@ class GameReader:
             data = data[:null_pos]
         return data.decode("ascii", errors="replace")
 
+    def _read_cstring(self, address: int, max_len: int = MAX_TYPE_NAME_LEN) -> str:
+        """Read a null-terminated ASCII string from game memory."""
+        raw = self.read_bytes(address, max_len)
+        null_pos = raw.find(b"\x00")
+        if null_pos >= 0:
+            raw = raw[:null_pos]
+        return raw.decode("ascii", errors="replace")
+
     # ── DynamicVectorClass helper ─────────────────────────────────────────────
 
     def read_dvec_pointers(self, dvec_address: int) -> list[int]:
         count = self.read_int(dvec_address + DVEC_COUNT)
         items_ptr = self.read_pointer(dvec_address + DVEC_ITEMS)
-        if not count or count <= 0 or count > 1000 or items_ptr < 0x10000:
+        if not count or count <= 0 or count > MAX_DVC_POINTER_COUNT or items_ptr < MIN_VALID_PTR:
             return []
         pointers = []
         for i in range(count):
-            ptr = self.read_pointer(items_ptr + i * 4)
-            if ptr and ptr >= 0x10000:
+            ptr = self.read_pointer(items_ptr + i * INT32_SIZE)
+            if ptr and ptr >= MIN_VALID_PTR:
                 pointers.append(ptr)
         return pointers
 
@@ -151,20 +166,16 @@ class GameReader:
             return self._type_names[dvec_addr]
         items_ptr = self.read_pointer(dvec_addr + DVEC_ITEMS)
         count = self.read_int(dvec_addr + DVEC_COUNT)
-        if not items_ptr or not count or count <= 0 or count > 500:
+        if not items_ptr or not count or count <= 0 or count > MAX_TYPE_ARRAY_COUNT:
             return []
         names = []
         for i in range(count):
-            tp = self.read_pointer(items_ptr + i * 4)
-            if not tp or tp < 0x10000:
+            tp = self.read_pointer(items_ptr + i * INT32_SIZE)
+            if not tp or tp < MIN_VALID_PTR:
                 names.append("?")
                 continue
             try:
-                raw = self.read_bytes(tp + TYPE_NAME_OFFSET, 24)
-                null_pos = raw.find(b"\x00")
-                if null_pos >= 0:
-                    raw = raw[:null_pos]
-                name = raw.decode("ascii", errors="replace")
+                name = self._read_cstring(tp + TYPE_NAME_OFFSET)
                 names.append(name if name else "?")
             except Exception:
                 names.append("?")
@@ -175,7 +186,6 @@ class GameReader:
         """Discover building type names via heap scan for vtable signature."""
         if self._building_names is not None:
             return self._building_names
-        import struct
         vtable_bytes = struct.pack("<I", VTABLE_BUILDING_TYPE)
         found: list[tuple[int, str]] = []
         for start, end in BUILDING_HEAP_SCAN_RANGES:
@@ -193,18 +203,14 @@ class GameReader:
                         break
                     obj_addr = addr + idx
                     try:
-                        name_raw = self.read_bytes(obj_addr + TYPE_NAME_OFFSET, 24)
-                        np_ = name_raw.find(b"\x00")
-                        if np_ >= 0:
-                            name_raw = name_raw[:np_]
-                        name = name_raw.decode("ascii", errors="replace")
+                        name = self._read_cstring(obj_addr + TYPE_NAME_OFFSET)
                         if name and len(name) >= 2 and all(
                             c.isalnum() or c == "_" for c in name
                         ):
                             found.append((obj_addr, name))
                     except Exception:
                         pass
-                    pos = idx + 4
+                    pos = idx + INT32_SIZE
                 addr += BUILDING_HEAP_CHUNK_SIZE
         found.sort(key=lambda x: x[0])
         names = [name for _, name in found]
@@ -222,7 +228,7 @@ class GameReader:
         items_ptr = self.read_pointer(house_addr + offset + CTR_ITEMS)
         count = self.read_int(house_addr + offset + CTR_COUNT)
         total = self.read_int(house_addr + offset + CTR_TOTAL)
-        if not items_ptr or items_ptr < 0x10000 or not count or count <= 0 or count > 500:
+        if not items_ptr or items_ptr < MIN_VALID_PTR or not count or count <= 0 or count > MAX_TYPE_ARRAY_COUNT:
             return None
         return CounterInfo(offset=offset, items_ptr=items_ptr,
                           count=count, total=total or 0)
@@ -256,13 +262,9 @@ class GameReader:
 
         ht_name = ""
         ht_ptr = self.read_pointer(ptr + HOUSE_TYPE_PTR)
-        if ht_ptr and ht_ptr >= 0x10000:
+        if ht_ptr and ht_ptr >= MIN_VALID_PTR:
             try:
-                raw = self.read_bytes(ht_ptr + HT_COUNTRY_NAME, 24)
-                null_pos = raw.find(b"\x00")
-                if null_pos >= 0:
-                    raw = raw[:null_pos]
-                ht_name = raw.decode("ascii", errors="replace")
+                ht_name = self._read_cstring(ht_ptr + HT_COUNTRY_NAME)
             except Exception:
                 pass
 
@@ -332,8 +334,8 @@ class GameReader:
         """Read per-type counts from a counter and pair with names."""
         result = []
         for i in range(ci.count):
-            val = self.read_int(ci.items_ptr + i * 4)
-            if val is None or val <= 0 or val > _UNIT_COUNT_MAX:
+            val = self.read_int(ci.items_ptr + i * INT32_SIZE)
+            if val is None or val <= 0 or val > UNIT_COUNT_MAX:
                 continue
 
             name = type_names[i] if i < len(type_names) and type_names[i] != "?" else f"#{i}"
@@ -341,9 +343,9 @@ class GameReader:
             faction = ""
             is_naval = False
 
-            # Enhance with unitdef if available (byte offset = index * 4)
+            # Enhance with unitdef if available (byte offset = index * INT32_SIZE)
             if unitdef_lookup:
-                byte_off = i * 4
+                byte_off = i * INT32_SIZE
                 udef = unitdef_lookup.get(byte_off)
                 if udef:
                     name = udef.name

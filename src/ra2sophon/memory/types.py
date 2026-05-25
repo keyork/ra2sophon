@@ -8,6 +8,14 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional
 
+# ── Validation thresholds ─────────────────────────────────────────────────────
+MAX_VALID_CREDITS = 1_000_000
+MAX_VALID_UNIT_TOTAL = 10000
+
+# ── Faction name sets ─────────────────────────────────────────────────────────
+SOVIET_HOUSE_NAMES = {"russians", "africans", "arabs", "confederation"}
+ALLIED_HOUSE_NAMES = {"americans", "alliance", "french", "germans", "british", "korea"}
+
 
 @dataclass
 class TypeCount:
@@ -82,11 +90,11 @@ class HouseInfo:
         if self.credits is not None and self.credits < 0:
             return False
         # Reject garbage data
-        if self.credits is not None and self.credits > 1_000_000:
+        if self.credits is not None and self.credits > MAX_VALID_CREDITS:
             return False
-        if self.building_total > 10000 or self.infantry_total > 10000:
+        if self.building_total > MAX_VALID_UNIT_TOTAL or self.infantry_total > MAX_VALID_UNIT_TOTAL:
             return False
-        if self.vehicle_total > 10000 or self.aircraft_total > 10000:
+        if self.vehicle_total > MAX_VALID_UNIT_TOTAL or self.aircraft_total > MAX_VALID_UNIT_TOTAL:
             return False
         # Reject "Neutral" / non-player houses (0 credits = not a real player)
         has_money = self.credits is not None and self.credits > 0
@@ -100,11 +108,9 @@ class HouseInfo:
         name = self.house_type_name.lower()
         if "yuri" in name:
             return "yuri"
-        soviet_names = {"russians", "africans", "arabs", "confederation"}
-        allied_names = {"americans", "alliance", "french", "germans", "british", "korea"}
-        if name in soviet_names:
+        if name in SOVIET_HOUSE_NAMES:
             return "soviet"
-        if name in allied_names:
+        if name in ALLIED_HOUSE_NAMES:
             return "allied"
         return "unknown"
 
