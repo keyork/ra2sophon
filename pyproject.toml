@@ -19,6 +19,7 @@ index-url = "https://pypi.tuna.tsinghua.edu.cn/simple"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/ra2sophon"]
+artifacts = ["src/ra2sophon/data/*.json", "src/ra2sophon/data/*.toml"]
 
 [tool.ruff]
 target-version = "py311"
