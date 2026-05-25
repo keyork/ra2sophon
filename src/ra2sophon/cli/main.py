@@ -4,6 +4,7 @@ Usage:
     python -m ra2sophon          # Read game state once and print
     python -m ra2sophon probe    # Interactive memory probe for offset discovery
     python -m ra2sophon monitor  # Continuous game state monitoring
+    python -m ra2sophon overlay  # Floating overlay window (always-on-top)
 """
 
 from __future__ import annotations
@@ -44,7 +45,12 @@ def print_state(reader: GameReader) -> None:
         print(f"    Spent:     ${player.credits_spent}")
         print(f"    Power:     {player.power_produced} / {player.power_drained} "
               f"(surplus: {surplus}) [{status}]")
-        print(f"    Buildings: {player.building_total}    Units: {player.vehicle_total}")
+        print(f"    Buildings: {player.building_total}    "
+              f"Infantry: {player.infantry_total}    "
+              f"Vehicles: {player.vehicle_total}")
+        print(f"    Naval:     {player.naval_total}    "
+              f"Aircraft: {player.aircraft_total}    "
+              f"Defeated: {player.is_defeated}")
 
     # Show other valid houses (skip empty/invalid)
     for i, house in enumerate(state.houses):
@@ -120,9 +126,18 @@ def cmd_stats(reader: GameReader) -> None:
         print()
 
 
-def main() -> None:
-    reader = GameReader()
+def cmd_overlay(_reader: GameReader) -> None:
+    """Launch floating overlay window (manages its own game connection)."""
+    from .overlay import run_overlay
+    run_overlay()
 
+
+def main() -> None:
+    if len(sys.argv) > 1 and sys.argv[1].lower() == "overlay":
+        cmd_overlay(None)
+        return
+
+    reader = GameReader()
     if not reader.attach():
         sys.exit(1)
 
@@ -139,7 +154,7 @@ def main() -> None:
                 cmd_stats(reader)
             else:
                 print(f"Unknown mode: {mode}")
-                print("Usage: python -m ra2sophon [probe|monitor|objects|stats]")
+                print("Usage: python -m ra2sophon [probe|monitor|objects|stats|overlay]")
         else:
             print_state(reader)
     finally:
