@@ -1,0 +1,41 @@
+# RA2 Sophon Overlay Configuration
+# Customize overlay appearance without editing Python code.
+
+[overlay]
+alpha = 0.90                # Window opacity (0.3 - 1.0)
+position = "+10+10"         # Screen position (X+Y offset from top-left)
+refresh_ms = 1000           # Data refresh interval in milliseconds
+line_width = 50             # Max characters per line before wrapping
+
+[overlay.frame]
+pad_x = 8
+pad_y = 6
+
+[overlay.timing]
+init_delay_ms = 200         # Delay before applying overlay style
+hotkey_poll_ms = 100        # Hotkey polling interval
+
+[overlay.fonts]
+header = ["Consolas", 10, "bold"]
+body = ["Consolas", 9]
+status = ["Consolas", 10]
+
+[colors]
+background = "#1a1a2e"
+separator = "#333355"
+header = "#ffd54f"
+power_ok = "#66bb6a"
+power_low = "#ff7043"
+
+[colors.faction]
+allied = "#4fc3f7"
+soviet = "#ef5350"
+yuri = "#ab47bc"
+unknown = "#e0e0e0"
+
+[colors.category]
+Building = "#90a4ae"
+Infantry = "#a5d6a7"
+Vehicle = "#80cbc4"
+Naval = "#80deea"
+Aircraft = "#b39ddb"
