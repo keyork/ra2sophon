@@ -5,6 +5,7 @@ Usage:
     python -m ra2sophon probe    # Interactive memory probe for offset discovery
     python -m ra2sophon monitor  # Continuous game state monitoring
     python -m ra2sophon overlay  # Floating overlay window (always-on-top)
+    python -m ra2sophon money <amount> [--all]  # Set credits
 """
 
 from __future__ import annotations
@@ -115,6 +116,25 @@ def cmd_objects(reader: GameReader) -> None:
             print(f"    0x{obj.address:08X}")
 
 
+def cmd_money(reader: GameReader) -> None:
+    """Set credits for current player. Usage: money <amount>"""
+    if len(sys.argv) < 3:
+        print("Usage: python -m ra2sophon money <amount>")
+        print("       python -m ra2sophon money <amount> --all")
+        return
+    try:
+        amount = int(sys.argv[2])
+    except ValueError:
+        print(f"Invalid amount: {sys.argv[2]}")
+        return
+    all_players = "--all" in sys.argv
+    count = reader.set_credits(amount, player_only=not all_players)
+    if count:
+        target = "all players" if all_players else "current player"
+        print(f"Set {target} credits to ${amount} ({count} house(s) modified)")
+    else:
+        print("Failed — no player house found")
+
 def cmd_stats(reader: GameReader) -> None:
     """Show per-type unit/building counts for all active houses."""
     state = reader.read_game_state()
@@ -150,9 +170,11 @@ def main() -> None:
                 cmd_objects(reader)
             elif mode == "stats":
                 cmd_stats(reader)
+            elif mode == "money":
+                cmd_money(reader)
             else:
                 print(f"Unknown mode: {mode}")
-                print("Usage: python -m ra2sophon [probe|monitor|objects|stats|overlay]")
+                print("Usage: python -m ra2sophon [probe|monitor|objects|stats|overlay|money <amount>]")
         else:
             print_state(reader)
     finally:

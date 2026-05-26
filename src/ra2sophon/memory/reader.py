@@ -129,6 +129,14 @@ class GameReader:
     def read_bytes(self, address: int, size: int) -> bytes:
         return self._pm.read_bytes(address, size)
 
+    def write_int(self, address: int, value: int) -> bool:
+        """Write an int32 value to game memory. Returns True on success."""
+        try:
+            self._pm.write_int(address, value)
+            return True
+        except Exception:
+            return False
+
     def read_string(self, address: int, max_len: int = 64) -> str:
         data = self.read_bytes(address, max_len)
         null_pos = data.find(b"\x00")
@@ -359,6 +367,17 @@ class GameReader:
                 is_naval=is_naval,
             ))
         return result
+
+    def set_credits(self, amount: int, player_only: bool = True) -> int:
+        """Set credits for current player (or all players). Returns count modified."""
+        state = self.read_game_state()
+        houses = [h for h in state.houses if h.is_current_player] if player_only else state.active_houses
+        count = 0
+        for house in houses:
+            if self.write_int(house.address + HOUSE_CREDITS_CURRENT, amount):
+                count += 1
+                logger.info("Set %s credits to $%d", house.house_type_name, amount)
+        return count
 
     def get_process_info(self) -> dict:
         if not self._pm:
