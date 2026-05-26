@@ -118,6 +118,7 @@ def cmd_objects(reader: GameReader) -> None:
 
 def cmd_money(reader: GameReader) -> None:
     """Add credits to current player. Usage: money <amount>"""
+    print("⚠ WARNING: Do NOT use this in online multiplayer matches.")
     if len(sys.argv) < 3:
         print("Usage: python -m ra2sophon money <amount>")
         print("       python -m ra2sophon money <amount> --all")
