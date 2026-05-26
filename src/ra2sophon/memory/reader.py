@@ -369,14 +369,17 @@ class GameReader:
         return result
 
     def set_credits(self, amount: int, player_only: bool = True) -> int:
-        """Set credits for current player (or all players). Returns count modified."""
+        """Add credits to current player (or all players). Returns count modified."""
         state = self.read_game_state()
         houses = [h for h in state.houses if h.is_current_player] if player_only else state.active_houses
         count = 0
         for house in houses:
-            if self.write_int(house.address + HOUSE_CREDITS_CURRENT, amount):
+            current = house.credits or 0
+            new_val = current + amount
+            if self.write_int(house.address + HOUSE_CREDITS_CURRENT, new_val):
                 count += 1
-                logger.info("Set %s credits to $%d", house.house_type_name, amount)
+                logger.info("Set %s credits: $%d + $%d = $%d",
+                            house.house_type_name, current, amount, new_val)
         return count
 
     def get_process_info(self) -> dict:

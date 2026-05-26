@@ -117,10 +117,11 @@ def cmd_objects(reader: GameReader) -> None:
 
 
 def cmd_money(reader: GameReader) -> None:
-    """Set credits for current player. Usage: money <amount>"""
+    """Add credits to current player. Usage: money <amount>"""
     if len(sys.argv) < 3:
         print("Usage: python -m ra2sophon money <amount>")
         print("       python -m ra2sophon money <amount> --all")
+        print("Adds <amount> to current credits.")
         return
     try:
         amount = int(sys.argv[2])
@@ -131,7 +132,7 @@ def cmd_money(reader: GameReader) -> None:
     count = reader.set_credits(amount, player_only=not all_players)
     if count:
         target = "all players" if all_players else "current player"
-        print(f"Set {target} credits to ${amount} ({count} house(s) modified)")
+        print(f"Added ${amount} to {target} ({count} house(s) modified)")
     else:
         print("Failed — no player house found")
 
