@@ -75,6 +75,18 @@ uv run python -m ra2sophon overlay
 
 外观可通过 `src/ra2sophon/data/overlay.toml` 自定义。
 
+### 修改金钱
+
+```bash
+# 给自己加 50000 块（累加，不是覆盖）
+uv run python -m ra2sophon money 50000
+
+# 给所有人加
+uv run python -m ra2sophon money 50000 --all
+```
+
+> ⚠ **WARNING: 请勿用于 CnCNet 在线对战，仅限单机/Skirmish 使用。**
+
 ## 配置文件
 
 ### 浮窗外观 — `data/overlay.toml`
