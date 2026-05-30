@@ -123,6 +123,7 @@ class OverlayApp:
     def __init__(self) -> None:
         self._reader: GameReader | None = None
         self._visible = True
+        self._in_match = False  # Track match-level state (vs process-level)
 
         # ── Root window ────────────────────────────────────────────────────
         self.root = tk.Tk()
@@ -284,7 +285,11 @@ class OverlayApp:
 
     # ── Refresh loop ───────────────────────────────────────────────────────
     def _refresh(self) -> None:
-        """Read game state and update overlay. Handles attach/detach lifecycle."""
+        """Read game state and update overlay.
+
+        When a match ends (active houses disappear), fully detaches the reader
+        so the next match starts with a fresh GameReader — same as initial startup.
+        """
         if self._hwnd:
             SetWindowPos(self._hwnd, HWND_TOPMOST, 0, 0, 0, 0,
                          SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
@@ -293,6 +298,7 @@ class OverlayApp:
             reader = GameReader()
             if reader.attach():
                 self._reader = reader
+                self._in_match = False
                 logger.info("Game detected, attached")
             else:
                 self._show_status("Waiting for game...")
@@ -301,17 +307,35 @@ class OverlayApp:
 
         try:
             state = self._reader.read_game_state()
-            self._update_display(state)
         except Exception as e:
             logger.warning("Refresh error: %s", e)
+            self._detach_reader()
+            self.root.after(REFRESH_MS, self._refresh)
+            return
+
+        if state.active_houses:
+            self._in_match = True
+            try:
+                self._update_display(state)
+            except Exception as e:
+                logger.warning("Display error: %s", e)
+        else:
+            if self._in_match:
+                logger.info("Match ended, restarting listener")
+            self._detach_reader()
+            self._show_status("Waiting for match...")
+
+        self.root.after(REFRESH_MS, self._refresh)
+
+    def _detach_reader(self) -> None:
+        """Detach reader and reset match state."""
+        if self._reader:
             try:
                 self._reader.detach()
             except Exception:
                 pass
-            self._reader = None
-            self._show_status("Game lost, waiting...")
-
-        self.root.after(REFRESH_MS, self._refresh)
+        self._reader = None
+        self._in_match = False
 
     def _show_status(self, text: str) -> None:
         """Show a single status line on the overlay."""

@@ -35,6 +35,7 @@ from .offsets import (
     CTR_TOTAL,
     DVEC_COUNT,
     DVEC_ITEMS,
+    GAME_IS_ACTIVE,
     HOUSE_ARRAY_PTR,
     HOUSE_ARRAY_INDEX,
     HOUSE_COUNTER_VTABLE,
@@ -105,6 +106,39 @@ class GameReader:
     @property
     def is_attached(self) -> bool:
         return self._pm is not None
+
+    def is_game_active(self) -> bool:
+        """Check if the game is in an active match (vs menu/loading).
+
+        Reads the Game::IsActive flag at offset 0xA8E9A0.
+        Returns False if not attached or read fails.
+        """
+        if not self._pm:
+            return False
+        val = self.read_int(GAME_IS_ACTIVE)
+        return val is not None and val != 0
+
+    def is_process_alive(self) -> bool:
+        """Check if the game process is still running.
+
+        Reads a known static address via pymem directly — raises on dead process.
+        """
+        if not self._pm:
+            return False
+        try:
+            self._pm.read_int(GAME_IS_ACTIVE)
+            return True
+        except Exception:
+            return False
+
+    def reset_cache(self) -> None:
+        """Clear cached type names and building names for fresh discovery.
+
+        Call this when transitioning between matches to ensure
+        the reader picks up any layout changes in the new game session.
+        """
+        self._type_names.clear()
+        self._building_names = None
 
     # ── Low-level reads ───────────────────────────────────────────────────────
 
